@@ -1,0 +1,75 @@
+{
+  "spacer": [
+    {
+      "name": "diameter",
+      "value": 1.25,
+      "unit": "mm"
+    },
+    {
+      "name": "height",
+      "value": 0.65,
+      "unit": "mm"
+    },
+    {
+      "name": "shape",
+      "value": "dome",
+      "unit": "dimensionless"
+    },
+    {
+      "name": "spacing",
+      "value": 8,
+      "unit": "mm"
+    },
+    {
+      "name": "hs_hc_ratio",
+      "value": 0.85,
+      "unit": "dimensionless"
+    }
+  ],
+  "channel": [
+    {
+      "name": "length",
+      "value": 0.10,
+      "unit": "m"
+    },
+    {
+      "name": "width",
+      "value": 0.02,
+      "unit": "m"
+    },
+    {
+      "name": "height",
+      "value": 0.76,
+      "unit": "mm"
+    }
+  ],
+  "membrane": [
+    {
+      "name": "A",
+      "value": 2.43412707,
+      "unit": "LMH_per_bar"
+    },
+    {
+      "name": "B",
+      "value": 0.1907,
+      "unit": "LMH"
+    }
+  ],
+  "operational": [
+    {
+      "name": "pressure",
+      "value": 937687.00,
+      "unit": "Pa"
+    },
+    {
+      "name": "feed_conc",
+      "value": 5.15,
+      "unit": "g"
+    },
+    {
+      "name": "permeate_pressure",
+      "value": 101325,
+      "unit": "Pa"
+    }
+  ]
+}
