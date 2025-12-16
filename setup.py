@@ -4,9 +4,10 @@
 """The setup script."""
 
 from setuptools import find_packages, setup
+from pathlib import Path
 
-with open("README.rst", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
+# Read the contents of your README file
+long_description = (Path(__file__).parent / "README.rst").read_text()
 
 setup_requirements = [
     "pytest-runner>=5.2",
