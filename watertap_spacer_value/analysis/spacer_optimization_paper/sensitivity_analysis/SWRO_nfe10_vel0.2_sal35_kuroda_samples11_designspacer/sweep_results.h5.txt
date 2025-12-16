@@ -1,0 +1,12 @@
+{'outputs': ['specific_energy_consumption',
+             'sh_multiplier',
+             'friction_factor_multiplier',
+             'LCOW',
+             'operating_pressure',
+             'water_recovery',
+             'n_pv',
+             'modules_per_pv',
+             'channel_height',
+             'spacer_porosity',
+             'velocity'],
+ 'sweep_params': ['sh_multiplier', 'friction_factor_multiplier']}
