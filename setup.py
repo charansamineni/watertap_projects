@@ -67,7 +67,7 @@ setup(
         ],
     },
     install_requires=requirements,
-    long_description=readme,
+    long_description=long_description,
     long_description_content_type="text/x-rst",
     include_package_data=True,
     keywords="watertap_spacer_value",
@@ -79,8 +79,7 @@ setup(
     tests_require=test_requirements,
     extras_require=extra_requirements,
     url="https://github.com/charansamineni/watertap_spacer_value",
-    # Do not edit this string manually, always use bumpversion
-    # Details in CONTRIBUTING.rst
     version="0.1.0",
     zip_safe=False,
 )
+
