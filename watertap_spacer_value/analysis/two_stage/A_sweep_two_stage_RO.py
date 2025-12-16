@@ -1,4 +1,5 @@
 # Author : Charan
+from idaes.core.util.model_statistics import degrees_of_freedom
 from pyomo.environ import (
     NonNegativeReals,
     Var,
@@ -6,6 +7,8 @@ from pyomo.environ import (
     value,
 )
 import pandas as pd
+from pyomo.opt import assert_optimal_termination
+from watertap.core.solvers import get_solver
 from watertap.costing import WaterTAPCosting
 from idaes.core import UnitModelCostingBlock
 from idaes.models.unit_models import Feed, Product
@@ -30,7 +33,9 @@ from idaes.core.util.scaling import set_scaling_factor, calculate_scaling_factor
 from idaes.core.util.initialization import propagate_state
 
 
-def build_swro_flowsheet(correlation_type="guillen", nfe=60):
+
+
+def build_two_stage_with_booster(correlation_type="guillen", nfe=60):
     m = ConcreteModel()
     m.fs = FlowsheetBlock(dynamic=False)
 
@@ -44,6 +49,7 @@ def build_swro_flowsheet(correlation_type="guillen", nfe=60):
 
     # Pump and Energy Recovery Device (ERD)
     m.fs.pump = Pump(property_package=m.fs.properties)
+    m.fs.booster_pump = Pump(property_package=m.fs.properties)
     m.fs.erd = EnergyRecoveryDevice(property_package=m.fs.properties)
 
     # RO Kwargs
@@ -60,77 +66,7 @@ def build_swro_flowsheet(correlation_type="guillen", nfe=60):
     }
 
     # Define RO unit model
-    m.fs.ro_stages = Set(initialize=[1], doc="RO stages")
-    m.fs.ro = ReverseOsmosis1D(
-        m.fs.ro_stages, property_package=m.fs.properties, **ro_kwargs
-    )
-    # Add spiral wound width constraint and change Sherwood number and friction factor correlations as required
-    for stage in m.fs.ro.values():
-        add_geometry_constraints(stage)
-        change_sh_and_f_correlations(stage, correlation_type=correlation_type)
-
-    # Arcs for connections
-    m.fs.feed_to_pump = Arc(source=m.fs.feed.outlet, destination=m.fs.pump.inlet)
-
-    # Connect RO stage to pump and product
-    m.fs.pump_to_ro = Arc(source=m.fs.pump.outlet, destination=m.fs.ro[1].inlet)
-    m.fs.ro_to_product = Arc(source=m.fs.ro[1].permeate, destination=m.fs.product.inlet)
-
-    m.fs.retentate_to_erd = Arc(source=m.fs.ro[1].retentate, destination=m.fs.erd.inlet)
-    m.fs.erd_to_brine = Arc(source=m.fs.erd.outlet, destination=m.fs.brine.inlet)
-
-    # Expand the arcs in the flowsheet
-    TransformationFactory("network.expand_arcs").apply_to(m)
-
-    # Add water recovery variable
-    m.fs.water_recovery = Var(
-        initialize=0.75,
-        domain=NonNegativeReals,
-        doc="Water recovery across the RO stages",
-        units=pyunits.dimensionless,
-    )
-
-    @m.fs.Constraint(doc="Constraint to enforce water recovery across RO stages",)
-    def water_recovery_constraint(b):
-        return (
-            b.water_recovery * b.feed.properties[0].flow_vol_phase["Liq"]
-            == b.product.properties[0].flow_vol_phase["Liq"]
-        )
-
-    return m
-
-
-def build_bwro_flowsheet(correlation_type="guillen", nfe=60):
-    m = ConcreteModel()
-    m.fs = FlowsheetBlock(dynamic=False)
-
-    # Define property package
-    m.fs.properties = SeawaterParameterBlock()
-
-    # Feed, Product, and brine blocks
-    m.fs.feed = Feed(property_package=m.fs.properties)
-    m.fs.product = Product(property_package=m.fs.properties)
-    m.fs.brine = Product(property_package=m.fs.properties)
-
-    # Pump and Energy Recovery Device (ERD)
-    m.fs.pump = Pump(property_package=m.fs.properties)
-    m.fs.erd = EnergyRecoveryDevice(property_package=m.fs.properties)
-
-    # RO Kwargs
-    ro_kwargs = {
-        "concentration_polarization_type": ConcentrationPolarizationType.calculated,
-        "mass_transfer_coefficient": MassTransferCoefficient.calculated,
-        "pressure_change_type": PressureChangeType.calculated,
-        "module_type": ModuleType.flat_sheet,
-        "has_pressure_change": True,
-        "transformation_method": "dae.finite_difference",
-        "transformation_scheme": "BACKWARD",
-        "finite_elements": nfe,
-        "has_full_reporting": True,
-    }
-
-    # Define RO unit model
-    m.fs.ro_stages = Set(initialize=[1, 2, 3], doc="RO stages")
+    m.fs.ro_stages = Set(initialize=[1, 2], doc="RO stages")
     m.fs.ro = ReverseOsmosis1D(
         m.fs.ro_stages, property_package=m.fs.properties, **ro_kwargs
     )
@@ -157,12 +93,23 @@ def build_bwro_flowsheet(correlation_type="guillen", nfe=60):
                 f"ro_inlet_arc_{i}",
                 Arc(source=m.fs.pump.outlet, destination=m.fs.ro[i].inlet),
             )
-        else:
+        elif i ==2:
             setattr(
                 m.fs,
                 f"ro_inlet_arc_{i}",
-                Arc(source=m.fs.ro[i - 1].retentate, destination=m.fs.ro[i].inlet),
+                Arc(
+                    source=m.fs.booster_pump.outlet,
+                    destination=m.fs.ro[i].inlet,
+                ),
             )
+
+        # Exit connections for RO stages
+        if i ==1 :
+            # Connect the Brine to booster
+            m.fs.ro_to_booster = Arc(
+                source=m.fs.ro[i].retentate, destination=m.fs.booster_pump.inlet
+            )
+
 
         # Permeate mixer connections
         setattr(
@@ -178,7 +125,7 @@ def build_bwro_flowsheet(correlation_type="guillen", nfe=60):
         source=m.fs.P_mixer.outlet, destination=m.fs.product.inlet
     )
 
-    m.fs.retentate_to_erd = Arc(source=m.fs.ro[3].retentate, destination=m.fs.erd.inlet)
+    m.fs.retentate_to_erd = Arc(source=m.fs.ro[2].retentate, destination=m.fs.erd.inlet)
     m.fs.erd_to_brine = Arc(source=m.fs.erd.outlet, destination=m.fs.brine.inlet)
 
     # Expand the arcs in the flowsheet
@@ -224,6 +171,7 @@ def fix_model(m, velocity=0.25, salinity=35, ro_system="SWRO"):
     calculate_feed_state(m, feed_salinity=salinity, vol_flow=feed_flow_rate)
     # Pump efficiency
     m.fs.pump.efficiency_pump.fix(0.8)  # 80% efficiency
+    m.fs.booster_pump.efficiency_pump.fix(0.8)  # 80% efficiency
     # ERD efficiency
     m.fs.erd.efficiency_pump.fix(0.8)  # 80% efficiency
     m.fs.erd.control_volume.properties_out[0].pressure.fix(101325)  # Pa, 1 atm
@@ -241,8 +189,6 @@ def fix_model(m, velocity=0.25, salinity=35, ro_system="SWRO"):
             stage.n_pressure_vessels.fix(first_stage_pvs)
         elif s_id == 2:
             stage.n_pressure_vessels.fix(first_stage_pvs * 2/3)
-        elif s_id == 3:
-            stage.n_pressure_vessels.fix(first_stage_pvs * 1/3)
 
         stage.A_comp[0, "H2O"].fix(water_permeability)  # m^2/s/bar, water permeability
         stage.B_comp[0, "TDS"].fix(salt_permeability)  # m/s/bar, Salt permeability
@@ -276,7 +222,6 @@ def scale_model(m, ro_system="SWRO"):
     set_scaling_factor(m.fs.brine.properties[0].flow_mass_phase_comp["Liq", "TDS"], 1e3)
     set_scaling_factor(m.fs.brine.properties[0].flow_mass_phase_comp["Liq", "H2O"], 1)
 
-    # Pump
     set_scaling_factor(m.fs.pump.control_volume.work, 1e-3)
     set_scaling_factor(
         m.fs.pump.control_volume.properties_in[0].flow_mass_phase_comp["Liq", "H2O"], 1
@@ -406,27 +351,25 @@ def initialize_model(m, overpressure=2, ro_system="SWRO", verbose=False):
     if verbose:
         m.fs.pump.report()
 
-    # Initialize RO stages
-    if ro_system == "SWRO":
-        propagate_state(m.fs.pump_to_ro)
-        m.fs.ro[1].initialize()
-        if verbose:
-            m.fs.ro[1].report()
-    elif ro_system == "BWRO":
-        # Initialize each RO stage sequentially
-        for s_id, stage in m.fs.ro.items():
-            if hasattr(m.fs, "ro_inlet_arc_" + str(s_id)):
-                if verbose:
-                    # print the arc
-                    print(f"Initializing RO stage {s_id} with inlet arc")
-                    getattr(m.fs, "ro_inlet_arc_" + str(s_id)).pprint()
 
-            propagate_state(getattr(m.fs, "ro_inlet_arc_" + str(s_id)))
-            stage.initialize()
-            if verbose:
-                stage.report()
-            # propagate the permeate stream to the mixer
-            propagate_state(getattr(m.fs, f"stage_{s_id}_to_P_mixer"))
+    # Initialize each RO stage sequentially
+    for s_id, stage in m.fs.ro.items():
+
+        if s_id ==2:
+            propagate_state(m.fs.ro_to_booster)
+            booster_osm_pressure = osm_pressure * overpressure * 1.5
+            m.fs.booster_pump.outlet.pressure[0].fix(booster_osm_pressure)
+            m.fs.booster_pump.initialize()
+
+        propagate_state(getattr(m.fs, "ro_inlet_arc_" + str(s_id)))
+        stage.initialize()
+        if verbose:
+            stage.report()
+        # propagate the permeate stream to the mixer
+        propagate_state(getattr(m.fs, f"stage_{s_id}_to_P_mixer"))
+
+
+
 
         # Initialize the permeate mixer after all RO stages are initialized
         m.fs.P_mixer.initialize()
@@ -486,7 +429,6 @@ def add_costing(m):
     m.fs.costing.add_annual_water_production(m.fs.product.properties[0].flow_vol)
     m.fs.costing.add_LCOW(m.fs.product.properties[0].flow_vol)
     m.fs.costing.add_specific_energy_consumption(m.fs.product.properties[0].flow_vol)
-    m.fs.costing.electricity_cost.fix(0.15) # $/kWh
     m.fs.costing.initialize()
     return
 
@@ -824,7 +766,7 @@ def collect_micro_trend(m, keys=None):
         pd.DataFrame with columns: 'global_length_domain', <key1>, <key2>, ...
     """
     if keys is None:
-        keys = ["velocity", "Re", "Sh", "cp_modulus", "K", "deltaP", "f", "Pn", "outlet_conc_interface"]
+        keys = ["velocity", "Re", "Sh", "cp_modulus", "K", "deltaP", "f", "Pn"]
     global_length_domain = []
     cumulative_length = 0.0
     # Build the global length domain
@@ -885,13 +827,6 @@ def collect_micro_trend(m, keys=None):
                     f_val = stage.feed_side.friction_factor_darcy[0, x].value
                     re_val = stage.feed_side.N_Re[0, x].value
                     values.append(f_val * re_val ** 3 * 0.5)
-            elif key == "outlet_conc_interface":
-                var = stage.feed_side.properties_interface
-                for x in ld[1:]:
-                    if (0, x) in var:
-                        values.append(var[0, x].conc_mass_phase_comp["Liq", "TDS"].value)
-                    else:
-                        raise KeyError(f"Key 'outlet_conc_interface' not found in stage {i}")
         data[key] = values
     df = pd.DataFrame(data)
     return df
@@ -922,14 +857,66 @@ def calculate_feed_state(m, feed_salinity, vol_flow):
 
 
 
-def add_telescoping_potential(stage):
-    stage.telescoping_potential = Var(
-        initialize=1.0,
-        bounds=(1e-3, 1.5),
-        doc="Telescoping potential variable",
-    )
-    @stage.Constraint(
-        doc = "Telescoping potential constraint",
-    )
-    def telescoping_potential_constraint(b):
-        return b.telescoping_potential * b.length * 1e5 == -1 * b.deltaP[0] # Convert Pa to bar
+def solve_for_recovery(m, solver=None, tee=False, display=True, strategy='simulation', recovery=0.5):
+    # Always ensure that bounds and constraints are applied before solving
+    if strategy  == 'simulation':
+        # Ensure LCOW objective is not active during simulation solves
+        if hasattr(m.fs, "lcow_objective") and m.fs.lcow_objective.active:
+            m.fs.lcow_objective.deactivate()
+        # Unfix the pressure and fix the recovery as needed
+        m.fs.pump.outlet.pressure[0].unfix()
+        m.fs.water_recovery.fix(recovery)
+        assert degrees_of_freedom(m) == 0, "DOF is not zero before simulation solve."
+
+
+    elif strategy == 'optimization':
+        if hasattr(m.fs, "lcow_objective") and not m.fs.lcow_objective.active:
+            m.fs.lcow_objective.activate()
+        elif not hasattr(m.fs, "lcow_objective"):
+            m.fs.lcow_objective = Objective(
+                expr=m.fs.costing.LCOW
+            )
+
+    # Solve the model
+    results = solve(m, solver=solver, tee=tee, display=display)
+    return results
+
+
+def solve(m, solver=None, tee=False, display=True):
+    if solver is None:
+        solver = get_solver()
+    results = solver.solve(m, tee=tee)
+    assert_optimal_termination(results)
+    if display:
+        print_solved_state(m)
+    return results
+
+
+if __name__ == "__main__":
+    model = build_two_stage_with_booster(correlation_type="guillen", nfe = 10)
+
+    # Print all arcs to verify connections
+    for arc in model.fs.component_objects(Arc, descend_into=True):
+        print(f"Arc: {arc.name}, Source: {arc.source}, Destination: {arc.destination}")
+
+    fix_model(model, velocity=0.25, salinity=35, ro_system="SWRO")
+
+    scale_model(model, ro_system="SWRO")
+
+    initialize_model(model, overpressure=4, ro_system="BWRO", verbose=True)
+
+    solve(model, tee=True, display=False)
+
+    add_costing(model)
+
+    solve(model, tee=True, display=True)
+
+    solve_for_recovery(model, strategy='simulation', tee=True, display=True, recovery=0.75)
+
+    model.fs.costing.pprint()
+
+
+
+
+
+
