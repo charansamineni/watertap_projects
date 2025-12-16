@@ -5,8 +5,8 @@
 
 from setuptools import find_packages, setup
 
-with open("README.md") as readme_file:
-    readme = readme_file.read()
+with open("README.rst", "r", encoding="utf-8") as fh:
+    long_description = fh.read()
 
 setup_requirements = [
     "pytest-runner>=5.2",
@@ -68,7 +68,7 @@ setup(
     },
     install_requires=requirements,
     long_description=readme,
-    long_description_content_type="text/markdown",
+    long_description_content_type="text/x-rst",
     include_package_data=True,
     keywords="watertap_spacer_value",
     name="watertap_spacer_value",
